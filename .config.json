@@ -1,0 +1,16 @@
+{
+    "version": "1.0",
+    "rssFeeds": [{
+            "name": "CBC",
+            "rssFeedURL": "https://www.cbc.ca/cmlink/rss-topstories"
+        },
+        {
+            "name": "CBC World",
+            "rssFeedURL": "https://www.cbc.ca/cmlink/rss-world"
+        },
+        {
+            "name": "kotaku",
+            "rssFeedURL": "https://kotaku.com/rss"
+        }
+    ]
+}

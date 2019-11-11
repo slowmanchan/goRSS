@@ -1,12 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/fatih/color"
@@ -14,6 +18,16 @@ import (
 	"github.com/mitchellh/go-wordwrap"
 	"github.com/urfave/cli"
 )
+
+type configFile struct {
+	Version  string
+	RssFeeds []*rssFeeds
+}
+
+type rssFeeds struct {
+	Name       string `xml:"Name"`
+	RssFeedURL string `xml:"RssFeedURL"`
+}
 
 type RssTwoMessage struct {
 	XMLName  xml.Name  `xml:"rss"`
@@ -48,16 +62,33 @@ func main() {
 	app.Usage = "show the rss index feed for a given rss feed url"
 	app.Commands = []cli.Command{
 		cli.Command{
+			Name:        "list",
+			Description: "list all subscribed feeds",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:  "feedURL, f",
+					Usage: "Feed url Needed",
+				},
+			},
+			Action: func(c *cli.Context) error {
+				listAll()
+				return nil
+			},
+		},
+		cli.Command{
 			Name:        "show",
 			Description: "show the rss",
 			Flags: []cli.Flag{
 				cli.StringFlag{
-					Name:  "feedURL, f",
-					Usage: "Feed url needed",
+					Name:  "rssName, r",
+					Usage: "saved rss name",
 				},
 			},
 			Action: func(c *cli.Context) error {
-				message := fetchRss(c.String("feedURL"))
+				message, err := fetchRss(c.String("rssName"))
+				if err != nil {
+					return err
+				}
 				printRssMessages(message.Channels)
 				return nil
 			},
@@ -70,28 +101,48 @@ func main() {
 	}
 }
 
-func fetchRss(rssFeedURL string) *RssTwoMessage {
+func fetchRss(inputRssName string) (*RssTwoMessage, error) {
+	configFileData, err := ioutil.ReadFile(".config.json")
+	if err != nil {
+		return nil, err
+	}
+
+	rssFeedURL := ""
+	configFile := &configFile{}
+	if err := json.Unmarshal(configFileData, configFile); err != nil {
+		return nil, err
+	}
+
+	for _, rssFeed := range configFile.RssFeeds {
+		if rssFeed.Name == inputRssName {
+			rssFeedURL = rssFeed.RssFeedURL
+		}
+	}
+
+	if rssFeedURL == "" {
+		return nil, errors.New("No rss feeds of that name were found")
+	}
+
 	res, err := http.Get(rssFeedURL)
 	if err != nil {
-		log.Println(err)
+		return nil, err
 	}
 
 	bodyBytes, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		log.Println(err)
+		return nil, err
 	}
 	message := new(RssTwoMessage)
 
 	err = xml.Unmarshal(bodyBytes, message)
 	if err != nil {
-		log.Println(err)
+		return nil, err
 	}
-
-	return message
+	return message, nil
 }
 
-func formatItem(item Item) string {
-	return fmt.Sprintf(`
+func printRssMessagesToScreen(stdin io.Writer, item Item) {
+	fmt.Fprintf(stdin, fmt.Sprintf(`
 %s
 
 %s
@@ -107,13 +158,43 @@ func formatItem(item Item) string {
 		wordwrap.WrapString(strings.TrimSpace(strip.StripTags(item.Description)), 80),
 		color.YellowString(item.Link),
 		strings.Repeat("-", 80),
-	)
+	))
 }
 
 func printRssMessages(channels []Channel) {
+	cmd := exec.Command("less", "-r")
+	r, stdin := io.Pipe()
+	cmd.Stdin = r
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	c := make(chan struct{})
+	go func() {
+		defer close(c)
+		cmd.Run()
+	}()
+
 	for _, channel := range channels {
 		for _, item := range channel.Items {
-			fmt.Println(formatItem(item))
+			printRssMessagesToScreen(stdin, item)
 		}
 	}
+	stdin.Close()
+	<-c
+}
+
+func listAll() error {
+	data, err := ioutil.ReadFile(".config.json")
+	if err != nil {
+		return err
+	}
+	configFile := &configFile{}
+	if err := json.Unmarshal(data, configFile); err != nil {
+		return err
+	}
+
+	for _, rssFeed := range configFile.RssFeeds {
+		fmt.Printf("%s | %s\n", rssFeed.Name, rssFeed.RssFeedURL)
+	}
+	return nil
 }
